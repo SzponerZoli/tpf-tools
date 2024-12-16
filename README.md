@@ -1,6 +1,6 @@
 # TPF Tools
 ## What is TPF?
-TPF is a file extension called **T**ext **P**icture **F**ormat. It stores every pixel's color in a line.
+TPF is a file extension made with ChatGPT, called **T**ext **P**icture **F**ormat. It stores every pixel's color in a line.
 The formatting looks like this when there is a 100x100 picture and the (0,1) coordinates are white:
 ```
 1 100x100
