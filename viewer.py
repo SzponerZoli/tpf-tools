@@ -1,179 +1,252 @@
-import tkinter as tk
-from tkinter import filedialog, messagebox
-from PIL import Image, ImageDraw, ImageTk, ImageFont
-import textwrap
+import sys
+import os
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QFileDialog, 
+                            QScrollArea, QWidget, QMenuBar, QToolBar)
+from PyQt6.QtGui import QPixmap, QImage, QAction, QIcon
+from PyQt6.QtCore import Qt
+from PIL import Image, ImageDraw, ImageFont
 
-# Globális változók
-current_file_path = None
-current_image = None
-zoom_level = 1.0  # Alapértelmezett zoom szint
-
-def open_tpf_file():
-    file_path = filedialog.askopenfilename(filetypes=[("TPF files", "*.tpf")])
-    
-    if file_path:
-        global current_file_path, current_image, zoom_level
-        current_file_path = file_path
-        image_data, width, height = read_tpf_image(file_path)
-        current_image = image_data  # Beállítjuk a globális current_image változót
-        zoom_level = 1.0  # Reseteljük a zoom szintet
-        show_image(image_data, width, height, zoom_level)
-
-def read_tpf_image(file_path):
-    with open(file_path, 'r') as file:
-        size_line = file.readline().strip()
-        width, height = map(int, size_line.split('x'))
-        image = Image.new("RGB", (width, height), color="white")  # Fehér háttér
-        for line in file:
-            line = line.strip()
-            if line:
-                coord_part, color_part = line.split(' ')
-                x, y = map(int, coord_part.strip('()').split(','))
-                r, g, b = map(int, color_part.strip('()').split(','))
-                image.putpixel((x, y), (r, g, b))
-    
-    return image, width, height
-
-def show_image(image_data, width, height, zoom_level=1.0):
-    global current_image
-    current_image = image_data
-    image = scale_image(image_data, zoom_level)
-    
-    image_tk = ImageTk.PhotoImage(image)
-    image_label.config(image=image_tk)
-    image_label.image = image_tk
-    image_label.pack(fill="both", expand=True)
-    text_frame.pack_forget()
-
-    # Az aktuális zoom szint kiírása
-    zoom_label.config(text=f"Current Zoom: {zoom_level:.2f}")
-    
-    # Zoom gombok megjelenítése
-    show_zoom_buttons()
-
-def scale_image(image_data, zoom_level):
-    # A kép nagyítása a zoom szintjével
-    new_size = (int(image_data.width * zoom_level), int(image_data.height * zoom_level))
-    return image_data.resize(new_size, Image.Resampling.LANCZOS)
-
-def zoom_in():
-    global zoom_level
-    zoom_level = min(zoom_level + 0.1, 3.0)  # Maximum 3.0 nagyítás
-    if current_image:  # Csak akkor jelenítse meg, ha van betöltött kép
-        show_image(current_image, current_image.width, current_image.height, zoom_level)
-
-def zoom_out():
-    global zoom_level
-    zoom_level = max(zoom_level - 0.1, 0.5)  # Minimum 0.5 nagyítás
-    if current_image:  # Csak akkor jelenítse meg, ha van betöltött kép
-        show_image(current_image, current_image.width, current_image.height, zoom_level)
-
-def hide_zoom_buttons():
-    zoom_in_button.pack_forget()
-    zoom_out_button.pack_forget()
-    zoom_label.pack_forget()
-
-def show_zoom_buttons():
-    # Csak akkor jelenítjük meg a zoom gombokat, ha van betöltött kép
-    if current_image:
-        zoom_in_button.pack(side=tk.LEFT, padx=10)
-        zoom_out_button.pack(side=tk.LEFT, padx=10)
-        zoom_label.pack()
-
-def show_text_view():
-    if current_file_path:
-        with open(current_file_path, 'r') as file:
-            content = file.read()
-            text_box.delete(1.0, tk.END)
-            text_box.insert(tk.END, content)
+class TPFViewer(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("TPF Image Viewer")
         
-        text_frame.pack(fill="both", expand=True)
-        image_label.pack_forget()
-        hide_zoom_buttons()  # Szöveges nézetben rejtjük el a zoom gombokat
+        # Kép megjelenítő rész
+        self.scroll_area = QScrollArea()
+        self.image_label = QLabel()
+        self.scroll_area.setWidget(self.image_label)
+        self.setCentralWidget(self.scroll_area)
+        
+        self.image = None
+        self.zoom_level = 1.0
+        
+        self.init_ui()
+        self.resize(800, 600)
 
-def save_text_view():
-    if current_file_path:
-        with open(current_file_path, 'w') as file:
-            content = text_box.get(1.0, tk.END)
-            file.write(content)
-        messagebox.showinfo("Mentés", "Változások elmentve!")
+    def init_ui(self):
+        self.create_menu()
+        self.create_toolbar()
+        self.display_empty_image()
 
-def create_default_image():
-    """Alapértelmezett üzenettel rendelkező kép létrehozása, sortörésekkel."""
-    width, height = 300, 200
-    image = Image.new("RGB", (width, height), color="white")
-    draw = ImageDraw.Draw(image)
+    def create_menu(self):
+        menubar = self.menuBar()
+        file_menu = menubar.addMenu('File')
 
-    # Alapértelmezett font beállítása (a rendszer alapértelmezett fontját használjuk, vagy a PIL-es fontot)
-    try:
-        font = ImageFont.truetype("arial.ttf", 16)  # Ha elérhető a font, próbálkozhatunk vele
-    except IOError:
-        font = ImageFont.load_default()  # Ha nem elérhető, alapértelmezett fontot használunk
+        open_action = QAction('Open File', self)
+        open_action.triggered.connect(self.open_image)
+        file_menu.addAction(open_action)
 
-    text = "To import an image, please click File -> Open TPF File."
-    # Használjuk a textwrap modult, hogy a szöveg beleférjen a képre
-    wrapped_text = textwrap.fill(text, width=20)  # 20 karakteres sorokra tördeljük
+        sample_action = QAction('Sample Image', self)
+        sample_action.triggered.connect(self.load_sample_image)
+        file_menu.addAction(sample_action)
 
-    # A tördelés után középre helyezzük a szöveget
-    lines = wrapped_text.split("\n")
-    total_height = sum([draw.textbbox((0, 0), line, font=font)[3] for line in lines])  # Szöveg magasságának kiszámítása
-    y_position = (height - total_height) // 2  # A szöveg középre igazítása
+        save_action = QAction('Save', self)
+        save_action.triggered.connect(self.save_image)
+        file_menu.addAction(save_action)
 
-    # Tördelés utáni sorok rajzolása
-    for line in lines:
-        text_width, text_height = draw.textbbox((0, 0), line, font=font)[2:4]
-        x_position = (width - text_width) // 2  # A szöveg középre igazítása
-        draw.text((x_position, y_position), line, font=font, fill="black")
-        y_position += text_height  # Y pozíció frissítése a következő sorhoz
+    def create_toolbar(self):
+        toolbar = QToolBar()
+        self.addToolBar(toolbar)
 
-    return image
+        # Zoom in action
+        zoom_in_action = QAction(QIcon.fromTheme('zoom-in'), 'Zoom In', self)
+        zoom_in_action.triggered.connect(self.zoom_in)
+        toolbar.addAction(zoom_in_action)
 
-# Tkinter ablak létrehozása
-root = tk.Tk()
-root.title("TPF Image Viewer")
+        # Zoom out action
+        zoom_out_action = QAction(QIcon.fromTheme('zoom-out'), 'Zoom Out', self)
+        zoom_out_action.triggered.connect(self.zoom_out)
+        toolbar.addAction(zoom_out_action)
 
-# Menü létrehozása
-menu_bar = tk.Menu(root)
+    def display_empty_image(self):
+        self.image_label.setPixmap(QPixmap())
 
-# File menü
-file_menu = tk.Menu(menu_bar, tearoff=0)
-file_menu.add_command(label="Open TPF File", command=open_tpf_file)
-file_menu.add_command(label="Save", command=save_text_view)
-file_menu.add_separator()
-file_menu.add_command(label="Exit", command=root.quit)
-menu_bar.add_cascade(label="File", menu=file_menu)
+    def open_image(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Open TPF File", "", "TPF files (*.tpf)")
+        if file_path:
+            self.image = self.load_tpf(file_path)
+            self.display_image()
 
-# View menü
-view_menu = tk.Menu(menu_bar, tearoff=0)
-view_menu.add_command(label="Image View", command=lambda: open_tpf_file() if current_file_path is None else show_image(*read_tpf_image(current_file_path), zoom_level))
-view_menu.add_command(label="Text View", command=show_text_view)
-menu_bar.add_cascade(label="View", menu=view_menu)
+    def open_directory(self):
+        dir_path = QFileDialog.getExistingDirectory(self, "Select Directory")
+        if dir_path:
+            self.current_directory = dir_path
+            self.load_gallery(dir_path)
 
-# Menü hozzáadása az ablakhoz
-root.config(menu=menu_bar)
+    def load_gallery(self, directory):
+        self.gallery_list.clear()
+        for file in os.listdir(directory):
+            if file.endswith('.tpf'):
+                self.gallery_list.addItem(file)
 
-# Kép megjelenítésére szolgáló címke
-image_label = tk.Label(root)
+    def on_gallery_item_clicked(self, item):
+        if self.current_directory:
+            file_path = os.path.join(self.current_directory, item.text())
+            self.image = self.load_tpf(file_path)
+            self.display_image()
 
-# Szöveges nézethez szükséges keret és görgetősáv
-text_frame = tk.Frame(root)
-scrollbar = tk.Scrollbar(text_frame)
-text_box = tk.Text(text_frame, yscrollcommand=scrollbar.set)
+    def load_sample_image(self):
+        # Create canvas with larger dimensions
+        width, height = 800, 400
+        self.image = Image.new('RGB', (width, height), (255, 255, 255))
+        draw = ImageDraw.Draw(self.image)
+        text = "Sample Image"
 
-scrollbar.config(command=text_box.yview)
-scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-text_box.pack(side=tk.LEFT, fill="both", expand=True)
+        try:
+            # Load font from local fonts directory
+            font_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), 
+                'fonts', 
+                'Roboto-Bold.ttf'
+            )
+            font_size = 72  # Large font size
+            font = ImageFont.truetype(font_path, font_size)
+            
+            # Get text size for centering
+            bbox = font.getbbox(text)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+            
+            # Draw text centered on the image
+            text_x = (width - text_width) // 2
+            text_y = (height - text_height) // 2
+            draw.text((text_x, text_y), text, fill="black", font=font)
+            
+        except Exception as e:
+            print(f"Font loading error: {e}")
+            # Fallback to default font if TTF loading fails
+            font = ImageFont.load_default()
+            bbox = font.getbbox(text)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+            text_x = (width - text_width) // 2
+            text_y = (height - text_height) // 2
+            draw.text((text_x, text_y), text, fill="black", font=font)
+        
+        self.display_image()
 
-# Zoom szint kijelzése
-zoom_label = tk.Label(root, text=f"Current Zoom: {zoom_level:.2f}")
+    def load_tpf(self, file_path):
+        with open(file_path, 'r') as file:
+            lines = file.readlines()
+            dimensions = lines[0].strip().split('x')
+            width, height = int(dimensions[0]), int(dimensions[1])
+            image = Image.new('RGB', (width, height), (255, 255, 255))
 
-# Zoom gombok
-zoom_in_button = tk.Button(root, text="+", command=zoom_in)
-zoom_out_button = tk.Button(root, text="-", command=zoom_out)
+            for line in lines[1:]:
+                parts = line.strip().split(' ')
+                coords = parts[0].strip('()').split(',')
+                color = tuple(map(int, parts[1].strip('()').split(',')))
+                
+                if len(coords) == 3:  # Run-length encoded
+                    x, y, count = map(int, coords)
+                    for i in range(count):
+                        image.putpixel((x + i, y), color)
+                else:  # Single pixel
+                    x, y = map(int, coords)
+                    image.putpixel((x, y), color)
 
-# Alapértelmezett kép betöltése
-current_image = create_default_image()
-show_image(current_image, current_image.width, current_image.height, zoom_level)
+            return image
 
-# Az ablak futtatása
-root.mainloop()
+    def display_image(self):
+        if self.image:
+            # Calculate new dimensions while maintaining aspect ratio
+            new_width = int(self.image.width * self.zoom_level)
+            new_height = int(self.image.height * self.zoom_level)
+            
+            # Resize the image using NEAREST sampling to keep pixels sharp
+            resized_image = self.image.resize(
+                (new_width, new_height),
+                Image.NEAREST
+            )
+            
+            # Convert to QImage and maintain stride alignment
+            width = resized_image.width
+            height = resized_image.height
+            bytes_per_line = 3 * width  # RGB format = 3 bytes per pixel
+            
+            qimage = QImage(
+                resized_image.tobytes(), 
+                width, 
+                height, 
+                bytes_per_line,
+                QImage.Format.Format_RGB888
+            )
+            
+            pixmap = QPixmap.fromImage(qimage)
+            self.image_label.setPixmap(pixmap)
+            self.image_label.adjustSize()
+
+    def wheelEvent(self, event):
+        # More controlled zoom with minimum and maximum limits
+        zoom_factor = 1.2
+        
+        if event.angleDelta().y() > 0:  # Zoom in
+            self.zoom_level = min(10.0, self.zoom_level * zoom_factor)
+        else:  # Zoom out
+            self.zoom_level = max(0.1, self.zoom_level / zoom_factor)
+        
+        self.display_image()
+
+    def zoom_in(self):
+        zoom_factor = 1.2
+        self.zoom_level = min(10.0, self.zoom_level * zoom_factor)
+        self.display_image()
+
+    def zoom_out(self):
+        zoom_factor = 1.2
+        self.zoom_level = max(0.1, self.zoom_level / zoom_factor)
+        self.display_image()
+
+    def save_image(self):
+        if not self.image:
+            return
+            
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save TPF File",
+            "",
+            "TPF files (*.tpf)"
+        )
+        
+        if file_path:
+            if not file_path.endswith('.tpf'):
+                file_path += '.tpf'
+                
+            with open(file_path, 'w') as file:
+                # Write dimensions
+                file.write(f"{self.image.width}x{self.image.height}\n")
+                
+                # Run-length encoding for pixels
+                current_color = None
+                count = 0
+                current_y = 0
+                
+                for y in range(self.image.height):
+                    for x in range(self.image.width):
+                        color = self.image.getpixel((x, y))
+                        
+                        if current_color is None:
+                            current_color = color
+                            count = 1
+                            continue
+                        
+                        if color == current_color and x < self.image.width - 1:
+                            count += 1
+                        else:
+                            # Write the run
+                            if count > 1:
+                                file.write(f"({x-count},{y},{count}) ({current_color[0]},{current_color[1]},{current_color[2]})\n")
+                            else:
+                                file.write(f"({x-1},{y}) ({current_color[0]},{current_color[1]},{current_color[2]})\n")
+                            current_color = color
+                            count = 1
+                    
+                    # Write the last run of each line
+                    if count > 0:
+                        file.write(f"({self.image.width-count},{y},{count}) ({current_color[0]},{current_color[1]},{current_color[2]})\n")
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    viewer = TPFViewer()
+    viewer.show()
+    sys.exit(app.exec())

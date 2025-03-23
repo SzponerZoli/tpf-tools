@@ -1,185 +1,301 @@
-import tkinter as tk
-from tkinter import filedialog, messagebox, colorchooser
-from PIL import Image, ImageDraw, ImageTk
+import sys
+from PyQt6.QtWidgets import QApplication
 
-# Globális változók
-current_file_path = None
-current_image = None
-drawing = False  # Rajzolás indítása
-last_x, last_y = 0, 0  # Az utolsó egér pozíciója
-current_color = "#000000"  # Kezdő szín
-tool = "pen"  # Kezdő eszköz: toll
-eraser_size = 10  # Radír mérete
-pen_size = 2  # Toll vastagsága
+# Create QApplication first
+app = QApplication(sys.argv)
 
-# Rajzoló objektum létrehozása
-draw = None
+# Now import the rest
+import os
+import qtawesome as qta
+from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, 
+                            QHBoxLayout, QPushButton, QColorDialog, QSpinBox, 
+                            QLabel, QFileDialog, QMenuBar, QMenu, QDialog,
+                            QGridLayout, QLineEdit, QFontDialog)
+from PyQt6.QtGui import QPainter, QColor, QImage, QPen, QIcon, QFont, QFontDatabase
+from PyQt6.QtCore import Qt, QPoint, QSize, QPointF
 
-def open_tpf_file():
-    """Betölt egy TPF fájlt és megjeleníti azt a vásznon."""
-    file_path = filedialog.askopenfilename(filetypes=[("TPF files", "*.tpf")])
-    if file_path:
-        global current_file_path, current_image, draw
-        current_file_path = file_path
-        image_data, width, height = read_tpf_image(file_path)
-        current_image = image_data
-        draw = ImageDraw.Draw(current_image)  # Rajzoló objektum inicializálása
-        show_image(image_data, width, height)
+class Canvas(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.init_canvas()
+        self.eraser_mode = False
+        self.text_mode = False
+        self.text_to_draw = ""
+        self.text_font = QFont("Arial", 12)
 
-def save_tpf_file():
-    """A rajz mentése TPF formátumban (mentés meglévő fájlba)."""
-    if current_file_path:  # Ha van már mentett fájl
-        with open(current_file_path, 'w') as file:
-            width, height = current_image.size
-            file.write(f"{width}x{height}\n")
+    def init_canvas(self, width=600, height=400):
+        self.image = QImage(width, height, QImage.Format.Format_RGB32)
+        self.image.fill(Qt.GlobalColor.white)
+        self.drawing = False
+        self.brush_size = 3
+        self.brush_color = QColor(0, 0, 0)
+        self.last_point = QPoint()
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.drawImage(0, 0, self.image)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self.text_mode:
+                painter = QPainter(self.image)
+                painter.setFont(self.text_font)
+                painter.setPen(QPen(self.brush_color))
+                painter.drawText(event.pos(), self.text_to_draw)
+                self.update()
+            else:
+                self.drawing = True
+                self.last_point = event.pos()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.MouseButton.LeftButton and self.drawing:
+            painter = QPainter(self.image)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)  # For smooth circles
+            
+            if self.eraser_mode:
+                painter.setPen(QPen(Qt.GlobalColor.white, 1))
+                painter.setBrush(QColor(Qt.GlobalColor.white))
+            else:
+                painter.setPen(QPen(self.brush_color, 1))
+                painter.setBrush(self.brush_color)
+
+            # Calculate intermediate points for smooth line
+            current_point = event.pos()
+            steps = max(abs(current_point.x() - self.last_point.x()),
+                       abs(current_point.y() - self.last_point.y())) // 2
+            if steps == 0:
+                steps = 1
+
+            for i in range(steps + 1):
+                x = self.last_point.x() + ((current_point.x() - self.last_point.x()) * i) / steps
+                y = self.last_point.y() + ((current_point.y() - self.last_point.y()) * i) / steps
+                radius = self.brush_size / 2
+                painter.drawEllipse(QPointF(x, y), radius, radius)
+
+            self.last_point = current_point
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.drawing = False
+
+    def save_tpf(self, filename):
+        width = self.image.width()
+        height = self.image.height()
+        
+        with open(filename, 'w') as f:
+            f.write(f"{width}x{height}\n")
             for y in range(height):
                 for x in range(width):
-                    r, g, b = current_image.getpixel((x, y))
-                    if (r, g, b) != (255, 255, 255):  # Csak a színes pixeleket írjuk ki
-                        file.write(f"({x},{y}) ({r},{g},{b})\n")
-    else:
-        save_as_tpf_file()  # Ha nincs mentett fájl, akkor "Save As"-t hívunk
+                    color = self.image.pixelColor(x, y)
+                    f.write(f"({x},{y}) ({color.red()},{color.green()},{color.blue()})\n")
 
-def save_as_tpf_file():
-    """A rajz mentése TPF formátumban új fájlként."""
-    file_path = filedialog.asksaveasfilename(defaultextension=".tpf", filetypes=[("TPF files", "*.tpf")])
-    if file_path:
-        global current_file_path
-        current_file_path = file_path
-        save_tpf_file()  # A mentést itt végezzük el
+    def load_tpf(self, filename):
+        with open(filename, 'r') as f:
+            # Read dimensions from first line
+            dimensions = f.readline().strip()
+            width, height = map(int, dimensions.split('x'))
+            
+            # Create new image
+            self.init_canvas(width, height)
+            
+            # Read pixel data
+            for line in f:
+                if not line.strip():
+                    continue
+                pos, color = line.strip().split(') (')
+                x, y = map(int, pos[1:].split(','))
+                r, g, b = map(int, color.split(')')[0].split(','))
+                self.image.setPixelColor(x, y, QColor(r, g, b))
+        
+        self.update()
 
-def read_tpf_image(file_path):
-    """Betölti a TPF fájlt és visszaadja a képet."""
-    with open(file_path, 'r') as file:
-        size_line = file.readline().strip()
-        width, height = map(int, size_line.split('x'))
-        image = Image.new("RGB", (width, height), color="white")  # Fehér háttér
-        for line in file:
-            line = line.strip()
-            if line:
-                coord_part, color_part = line.split(' ')
-                x, y = map(int, coord_part.strip('()').split(','))
-                r, g, b = map(int, color_part.strip('()').split(','))
-                image.putpixel((x, y), (r, g, b))
-    return image, width, height
+class CanvasSizeDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Canvas Size")
+        layout = QGridLayout(self)
 
-def show_image(image_data, width, height):
-    """Kép megjelenítése a Tkinter ablakban."""
-    image_tk = ImageTk.PhotoImage(image_data)
-    canvas.create_image(0, 0, image=image_tk, anchor="nw")
-    canvas.image = image_tk
+        # Width input
+        layout.addWidget(QLabel("Width:"), 0, 0)
+        self.width_spin = QSpinBox()
+        self.width_spin.setRange(1, 3000)
+        self.width_spin.setValue(600)
+        layout.addWidget(self.width_spin, 0, 1)
 
-def start_drawing(event):
-    """A rajzolás kezdete."""
-    global drawing, last_x, last_y
-    drawing = True
-    last_x, last_y = event.x, event.y
+        # Height input
+        layout.addWidget(QLabel("Height:"), 1, 0)
+        self.height_spin = QSpinBox()
+        self.height_spin.setRange(1, 3000)
+        self.height_spin.setValue(400)
+        layout.addWidget(self.height_spin, 1, 1)
 
-def stop_drawing(event):
-    """A rajzolás befejezése."""
-    global drawing
-    drawing = False
+        # OK button
+        ok_button = QPushButton("OK")
+        ok_button.clicked.connect(self.accept)
+        layout.addWidget(ok_button, 2, 0, 1, 2)
 
-def draw_line(event):
-    """A rajzolás működése, ha az egér mozgásban van."""
-    global last_x, last_y
-    if drawing:
-        if tool == "pen":
-            # Rajzolás a canvasra
-            canvas.create_line(last_x, last_y, event.x, event.y, width=pen_size, fill=current_color, capstyle="round", smooth=True)
-            # Kép frissítése a putpixel helyett a rajzoló objektummal
-            draw.line([last_x, last_y, event.x, event.y], fill=current_color, width=pen_size)
-        elif tool == "eraser":
-            canvas.create_oval(event.x - eraser_size, event.y - eraser_size, event.x + eraser_size, event.y + eraser_size,
-                               fill="white", outline="white")  # Radír: fehérre törli
-            erase_on_image(event.x, event.y)  # Radírozás frissítése a képen
-        last_x, last_y = event.x, event.y
+class TextInputDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Enter Text")
+        layout = QGridLayout(self)
 
-def clear_canvas():
-    """Törli a vásznat (üresre állítja a képet)."""
-    global current_image, draw
-    width, height = current_image.size
-    current_image = Image.new("RGB", (width, height), color="white")  # Üres kép
-    draw = ImageDraw.Draw(current_image)  # Újra inicializáljuk a rajzoló objektumot
-    canvas.delete("all")  # Töröljük a rajzot
-    show_image(current_image, width, height)  # Újrarajzoljuk a tiszta képet
+        # Text input
+        self.text_input = QLineEdit()
+        layout.addWidget(QLabel("Text:"), 0, 0)
+        layout.addWidget(self.text_input, 0, 1)
 
-def select_color():
-    """Színválasztó a rajzoláshoz."""
-    global current_color
-    color = colorchooser.askcolor()[1]  # Szín választása
-    if color:
-        current_color = color
+        # Font button
+        font_btn = QPushButton("Choose Font")
+        font_btn.clicked.connect(self.choose_font)
+        layout.addWidget(font_btn, 1, 0, 1, 2)
 
-def select_tool(new_tool):
-    """Kiválasztja az eszközt (pen, eraser)."""
-    global tool
-    tool = new_tool
+        # OK button
+        ok_button = QPushButton("OK")
+        ok_button.clicked.connect(self.accept)
+        layout.addWidget(ok_button, 2, 0, 1, 2)
 
-def erase_on_image(x, y):
-    """A radír alkalmazása az aktuális képen."""
-    global current_image
-    width, height = current_image.size
-    for i in range(-eraser_size, eraser_size):
-        for j in range(-eraser_size, eraser_size):
-            if 0 <= x + i < width and 0 <= y + j < height:
-                current_image.putpixel((x + i, y + j), (255, 255, 255))  # Radír: fehér háttér
-    show_image(current_image, width, height)
+        self.font = QFont("Arial", 12)
 
-def set_pen_size(size):
-    """Beállítja a toll vastagságát."""
-    global pen_size
-    pen_size = size
+    def choose_font(self):
+        font, ok = QFontDialog.getFont(self.font, self)
+        if ok:
+            self.font = font
 
-def set_eraser_size(size):
-    """Beállítja a radír méretét."""
-    global eraser_size
-    eraser_size = size
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("TPF Paint")
+        self.resize(800, 600)
+        
+        # Create menubar
+        menubar = self.menuBar()
+        
+        # File menu
+        file_menu = menubar.addMenu("File")
+        file_menu.addAction("New", self.new_canvas)
+        file_menu.addAction("Open", self.open_file)
+        file_menu.addAction("Save", self.save_file)
+        file_menu.addSeparator()
+        file_menu.addAction("Exit", self.close)
 
-# Tkinter ablak létrehozása
-root = tk.Tk()
-root.title("TPF Paint")
+        # Edit menu
+        edit_menu = menubar.addMenu("Edit")
+        edit_menu.addAction("Canvas Size", self.change_canvas_size)
+        
+        # Main widget and layout
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        layout = QVBoxLayout(main_widget)
+        
+        # Toolbar
+        toolbar = QHBoxLayout()
+        
+        # Color button
+        color_btn = QPushButton()
+        color_btn.setIcon(QIcon(qta.icon('fa5s.palette').pixmap(32, 32)))  # Changed from fa5.palette
+        color_btn.setToolTip("Choose Color")
+        color_btn.clicked.connect(self.choose_color)
+        toolbar.addWidget(color_btn)
+        
+        # Text tool button
+        self.text_btn = QPushButton()
+        self.text_btn.setIcon(QIcon(qta.icon('fa5s.font').pixmap(32, 32)))  # Changed from fa5.font
+        self.text_btn.setToolTip("Text Tool")
+        self.text_btn.setCheckable(True)
+        self.text_btn.clicked.connect(self.toggle_text_tool)
+        toolbar.addWidget(self.text_btn)
+        
+        # Eraser toggle button
+        self.eraser_btn = QPushButton()
+        self.eraser_btn.setIcon(QIcon(qta.icon('fa5s.eraser').pixmap(32, 32)))  # Changed from fa5.eraser
+        self.eraser_btn.setToolTip("Eraser")
+        self.eraser_btn.setCheckable(True)
+        self.eraser_btn.clicked.connect(self.toggle_eraser)
+        toolbar.addWidget(self.eraser_btn)
+        
+        # Brush size
+        toolbar.addWidget(QLabel("Brush size:"))
+        self.brush_size = QSpinBox()
+        self.brush_size.setValue(10)
+        self.brush_size.valueChanged.connect(self.change_brush_size)
+        toolbar.addWidget(self.brush_size)
+        
+        button_style = """
+            QPushButton {
+                padding: 5px;
+                min-width: 32px;
+                min-height: 32px;
+            }
+        """
+        color_btn.setStyleSheet(button_style)
+        self.text_btn.setStyleSheet(button_style)
+        self.eraser_btn.setStyleSheet(button_style)
+        
+        layout.addLayout(toolbar)
+        
+        # Canvas
+        self.canvas = Canvas()
+        layout.addWidget(self.canvas)
 
-# Vászon létrehozása
-canvas = tk.Canvas(root, width=600, height=400, bg="white")
-canvas.pack()
+    def new_canvas(self):
+        self.canvas.init_canvas()
 
-canvas.bind("<Button-1>", start_drawing)  # Bal egérgomb: rajzolás
-canvas.bind("<B1-Motion>", draw_line)  # Mozgás közbeni rajzolás
-canvas.bind("<ButtonRelease-1>", stop_drawing)  # Egér felengedése: megállás
+    def open_file(self):
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open TPF File",
+            "",
+            "TPF Files (*.tpf);;All Files (*.*)"
+        )
+        if filename:
+            self.canvas.load_tpf(filename)
 
-# Menü létrehozása
-menu_bar = tk.Menu(root)
-file_menu = tk.Menu(menu_bar, tearoff=0)
-file_menu.add_command(label="Open TPF File", command=open_tpf_file)
-file_menu.add_command(label="Save TPF File", command=save_tpf_file)
-file_menu.add_command(label="Save As", command=save_as_tpf_file)
-file_menu.add_command(label="Clear", command=clear_canvas)
-menu_bar.add_cascade(label="File", menu=file_menu)
+    def save_file(self):
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save TPF File",
+            "",
+            "TPF Files (*.tpf);;All Files (*.*)"
+        )
+        if filename:
+            if not filename.endswith('.tpf'):
+                filename += '.tpf'
+            self.canvas.save_tpf(filename)
 
-tool_menu = tk.Menu(menu_bar, tearoff=0)
-tool_menu.add_command(label="Pen", command=lambda: select_tool("pen"))
-tool_menu.add_command(label="Eraser", command=lambda: select_tool("eraser"))
-menu_bar.add_cascade(label="Tools", menu=tool_menu)
+    def choose_color(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            self.canvas.brush_color = color
 
-size_menu = tk.Menu(menu_bar, tearoff=0)
-size_menu.add_command(label="Pen Size 1", command=lambda: set_pen_size(1))
-size_menu.add_command(label="Pen Size 2", command=lambda: set_pen_size(2))
-size_menu.add_command(label="Pen Size 5", command=lambda: set_pen_size(5))
-size_menu.add_command(label="Eraser Size 5", command=lambda: set_eraser_size(5))
-size_menu.add_command(label="Eraser Size 10", command=lambda: set_eraser_size(10))
-menu_bar.add_cascade(label="Sizes", menu=size_menu)
+    def change_brush_size(self, size):
+        self.canvas.brush_size = size
 
-color_menu = tk.Menu(menu_bar, tearoff=0)
-color_menu.add_command(label="Select Color", command=select_color)
-menu_bar.add_cascade(label="Colors", menu=color_menu)
+    def change_canvas_size(self):
+        dialog = CanvasSizeDialog(self)
+        if dialog.exec():
+            width = dialog.width_spin.value()
+            height = dialog.height_spin.value()
+            self.canvas.init_canvas(width, height)
 
-root.config(menu=menu_bar)
+    def toggle_eraser(self):
+        self.canvas.eraser_mode = self.eraser_btn.isChecked()
 
-# Kezdő kép betöltése
-current_image = Image.new("RGB", (600, 400), color="white")
-draw = ImageDraw.Draw(current_image)
-show_image(current_image, 600, 400)
+    def toggle_text_tool(self):
+        if self.text_btn.isChecked():
+            self.eraser_btn.setChecked(False)
+            self.canvas.eraser_mode = False
+            dialog = TextInputDialog(self)
+            if dialog.exec():
+                self.canvas.text_to_draw = dialog.text_input.text()
+                self.canvas.text_font = dialog.font
+                self.canvas.text_mode = True
+        else:
+            self.canvas.text_mode = False
 
-# Az ablak futtatása
-root.mainloop()
+if __name__ == '__main__':
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())

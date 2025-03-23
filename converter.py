@@ -1,83 +1,159 @@
-import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from PyQt6.QtWidgets import (QMainWindow, QApplication, QPushButton, QFileDialog,
+                           QVBoxLayout, QWidget, QLabel, QMessageBox)
+from PyQt6.QtGui import QImage, QPixmap
 from PIL import Image
+import sys
+import os
 
-def read_tpf_image(file_path):
-    """Olvassa a TPF fájlt, és visszaad egy Image objektumot."""
-    with open(file_path, 'r') as file:
-        size_line = file.readline().strip()
-        width, height = map(int, size_line.split('x'))
-        
-        image = Image.new("RGB", (width, height), color="white")
-        
-        for line in file:
-            line = line.strip()
-            if line:
-                coord_part, color_part = line.split(' ')
-                x, y = map(int, coord_part.strip('()').split(','))
-                r, g, b = map(int, color_part.strip('()').split(','))
-                image.putpixel((x, y), (r, g, b))
-    
-    return image
+class ImageConverter(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("TPF Image Converter")
+        self.setGeometry(100, 100, 400, 200)
 
-def write_tpf_image(image, file_path):
-    """Ment egy Image objektumot TPF formátumba."""
-    width, height = image.size
-    with open(file_path, 'w') as file:
-        file.write(f"{width}x{height}\n")
-        
-        for x in range(width):
-            for y in range(height):
-                r, g, b = image.getpixel((x, y))
-                if (r, g, b) != (255, 255, 255):
-                    file.write(f"({x},{y}) ({r},{g},{b})\n")
+        # Create central widget and layout
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
 
-def convert_file():
-    conversion_type = conversion_var.get()
-    
-    try:
-        if conversion_type == "TPF to PNG" or conversion_type == "TPF to JPG":
-            tpf_path = filedialog.askopenfilename(title="Open TPF File", filetypes=[("TPF files", "*.tpf")])
-            if not tpf_path:
+        # Create buttons
+        self.btn_to_tpf = QPushButton("Convert JPG/PNG to TPF", self)
+        self.btn_from_tpf = QPushButton("Convert TPF to JPG/PNG", self)
+        
+        # Add status label
+        self.status_label = QLabel("Ready", self)
+        
+        # Add widgets to layout
+        layout.addWidget(self.btn_to_tpf)
+        layout.addWidget(self.btn_from_tpf)
+        layout.addWidget(self.status_label)
+        
+        # Connect buttons to functions
+        self.btn_to_tpf.clicked.connect(self.convert_to_tpf)
+        self.btn_from_tpf.clicked.connect(self.convert_from_tpf)
+
+    def convert_to_tpf(self):
+        try:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self, 
+                "Select Image",
+                "",
+                "Image Files (*.jpg *.png *.jpeg)"
+            )
+            
+            if not file_path:
                 return
+                
+            # Open and verify image
+            img = Image.open(file_path)
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
             
-            image = read_tpf_image(tpf_path)
-            save_format = "PNG" if conversion_type == "TPF to PNG" else "JPEG"
-            save_extension = ".png" if save_format == "PNG" else ".jpg"
-            save_path = filedialog.asksaveasfilename(defaultextension=save_extension, filetypes=[(f"{save_format} files", f"*{save_extension}")])
+            width, height = img.size
+            pixels = img.load()
             
-            if save_path:
-                image.save(save_path, save_format)
-                messagebox.showinfo("Success", f"TPF successfully converted to {save_format}!")
-
-        elif conversion_type == "PNG to TPF" or conversion_type == "JPG to TPF":
-            img_types = [("Image files", "*.png *.jpg"), ("PNG files", "*.png"), ("JPG files", "*.jpg")]
-            img_path = filedialog.askopenfilename(title="Open Image File", filetypes=img_types)
-            if not img_path:
+            save_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save TPF",
+                os.path.splitext(file_path)[0] + ".tpf",
+                "TPF Files (*.tpf)"
+            )
+            
+            if not save_path:
                 return
+                
+            with open(save_path, 'w') as f:
+                # Write header
+                f.write(f"1 {width}x{height}\n")
+                
+                # Write pixel data
+                for y in range(height):
+                    for x in range(width):
+                        r, g, b = pixels[x, y]
+                        f.write(f"({x},{y}) ({r},{g},{b})\n")
             
-            image = Image.open(img_path).convert("RGB")
-            tpf_path = filedialog.asksaveasfilename(defaultextension=".tpf", filetypes=[("TPF files", "*.tpf")])
+            self.status_label.setText("Conversion successful!")
+            QMessageBox.information(self, "Success", "Image converted to TPF successfully!")
             
-            if tpf_path:
-                write_tpf_image(image, tpf_path)
-                messagebox.showinfo("Success", "Image successfully converted to TPF!")
+        except Exception as e:
+            self.status_label.setText(f"Error: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Error converting image: {str(e)}")
 
-    except Exception as e:
-        messagebox.showerror("Error", f"Failed to convert: {e}")
+    def convert_from_tpf(self):
+        try:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select TPF",
+                "",
+                "TPF Files (*.tpf)"
+            )
+            
+            if not file_path:
+                return
+                
+            with open(file_path, 'r') as f:
+                lines = f.readlines()
+                
+            if not lines:
+                raise ValueError("Empty TPF file")
+                
+            # Parse header
+            header = lines[0].strip().split()
+            if len(header) != 2:
+                raise ValueError("Invalid TPF header format")
+                
+            version, dimensions = header
+            if version != "1":
+                raise ValueError(f"Unsupported TPF version: {version}")
+                
+            try:
+                width, height = map(int, dimensions.split('x'))
+            except:
+                raise ValueError("Invalid dimensions in TPF header")
+            
+            # Create new image
+            img = Image.new('RGB', (width, height), color='black')
+            pixels = img.load()
+            
+            # Parse pixels
+            for line in lines[1:]:
+                try:
+                    coords, colors = line.strip().split(') (')
+                    x, y = map(int, coords[1:].split(','))
+                    r, g, b = map(int, colors.split(','))
+                    
+                    if not (0 <= x < width and 0 <= y < height):
+                        continue
+                    if not (0 <= r <= 255 and 0 <= g <= 255 and 0 <= b <= 255):
+                        continue
+                        
+                    pixels[x, y] = (r, g, b)
+                except:
+                    continue
+            
+            save_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save Image",
+                os.path.splitext(file_path)[0] + ".png",
+                "PNG Files (*.png);;JPEG Files (*.jpg *.jpeg)"
+            )
+            
+            if not save_path:
+                return
+                
+            img.save(save_path)
+            self.status_label.setText("Conversion successful!")
+            QMessageBox.information(self, "Success", "TPF converted to image successfully!")
+            
+        except Exception as e:
+            self.status_label.setText(f"Error: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Error converting TPF: {str(e)}")
 
-# Tkinter GUI setup
-root = tk.Tk()
-root.title("TPF Converter")
+def main():
+    app = QApplication(sys.argv)
+    converter = ImageConverter()
+    converter.show()
+    sys.exit(app.exec())
 
-# Conversion options dropdown
-conversion_var = tk.StringVar(value="TPF to PNG")
-conversion_options = ["TPF to PNG", "TPF to JPG", "PNG to TPF", "JPG to TPF"]
-conversion_dropdown = ttk.Combobox(root, textvariable=conversion_var, values=conversion_options, state="readonly")
-conversion_dropdown.pack(pady=10)
-
-# Convert button
-convert_button = tk.Button(root, text="Convert", command=convert_file)
-convert_button.pack(pady=20)
-
-root.mainloop()
+if __name__ == '__main__':
+    main()
