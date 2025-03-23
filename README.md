@@ -22,5 +22,5 @@ There is a TPF Paint there you can save pictures in .tpf format.
   - Download and install Python from www.python.org/downloads
   - open terminal at the TPF Tools folder and type: ```python -r requirements.txt```
 - Linux
-  - Install python with your package manager. e. g. ```sudo apt install python3```
+  - Install python with your package manager e. g. ```sudo apt install python3```
   - open terminal at the TPF Tools folder and type: ```python -r requirements.txt```
