@@ -8,6 +8,19 @@ The formatting looks like this when there is a 100x100 picture and the (0,1) coo
 3 ...
 ```
 ## What's included in TPF Tools?
-There is a TPF file viewer with you can view TPF pictures in Picture Mode and edit TPF files in text mode.
+There is a TPF file viewer with you can view TPF pictures.
 There is a TPF Converter that can convert TPF to PNG and JPG and vice versa.
-There is a TPF Paint there you can paint pictures in TPF.
+There is a TPF Paint there you can save pictures in .tpf format.
+
+## Requirements
+- Python 3
+  - PyQt6
+  - Pillow
+  - Qtawesome
+### Installing requirements
+- Windows
+  - Download and install Python from www.python.org/downloads
+  - open terminal at the TPF Tools folder and type: ```python -r requirements.txt```
+- Linux
+  - Install python with your package manager e. g. ```sudo apt install python3```
+  - open terminal at the TPF Tools folder and type: ```python -r requirements.txt```
