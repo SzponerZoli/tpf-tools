@@ -1,0 +1,3 @@
+PyQt6==6.2.0
+Pillow==8.4.0
+qtawesome==1.0.3
